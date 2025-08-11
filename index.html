@@ -1,0 +1,1112 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Minimal RT Sphere – PBR + IBL</title>
+    <style>
+      :root{
+        --font-sans: Inter, "Helvetica Neue", Helvetica, Arial, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Ubuntu, Cantarell, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        --step--1: 12px; --step-0: 14px; --step-1: 16px; --step-2: 20px; --lh: 1.5;
+        --bg: #0b0e13; --panel: rgba(12,14,20,0.86); --ink: #e6e6e6; --muted: #9aa6b6; --hair: rgba(255,255,255,0.06); --accent: #e6e6e6;
+        --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px;
+      }
+      html, body{ margin:0; height:100%; background: var(--bg); color: var(--ink); font-family: var(--font-sans); font-size: var(--step-0); line-height: var(--lh); }
+      #wrap{ min-height: 100dvh; display: grid; grid-template-columns: 1fr 360px; }
+      #stage{ position: relative; background: #06080c; }
+      #gl{ position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+      #ui{ width: auto; max-width: none; padding: var(--s-3) var(--s-4); overflow: auto; background: var(--panel); border-left: 1px solid var(--hair); backdrop-filter: blur(6px); }
+      #ui h3{ margin: 0 0 var(--s-3); font-size: var(--step-1); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+      .row { margin: 8px 0; display: grid; grid-template-columns: 120px 1fr 64px; gap: 8px; align-items: center; }
+      .row label { font-size: var(--step--1); color: var(--muted); }
+      .row input[type="range"] { width: 100%; }
+      .row input[type="number"] { width: 100%; background: #0f131b; color: var(--ink); border: 1px solid #232938; border-radius: 6px; padding: 4px 6px; }
+      .row input[type="color"] { width: 100%; height: 28px; border: none; background: transparent; }
+      .row small { color: #93a1b5; font-size: 11px; justify-self: end; font-family: var(--font-mono); }
+      .group { margin: var(--s-3) 0 var(--s-4); padding: var(--s-3); border: 1px solid var(--hair); border-radius: 10px; background: rgba(14,17,25,0.6); }
+      .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .mono { font-family: var(--font-mono); }
+      .file { border: 1px dashed #374055; border-radius: 8px; padding: 10px; text-align: center; cursor: pointer; }
+      .file:hover { background: rgba(255,255,255,0.03); }
+      .hint { color: #8ea2bf; font-size: 11px; }
+      .kbd { font-size: 11px; padding: 2px 5px; border: 1px solid #374055; border-radius: 6px; }
+      .footer { color: var(--muted); font-size: 11px; display: flex; justify-content: space-between; align-items: center; margin-top: var(--s-2); }
+      a { color: #cfdcff; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      input[type="range"], input[type="checkbox"], select { accent-color: var(--accent); }
+      @media (max-width: 768px){
+        #wrap{ display:block; height:100dvh; }
+        #stage{ width:100%; height:50dvh; }
+        #gl{ position:absolute; inset:0; width:100%; height:100%; }
+        #ui{
+          height:50dvh;
+          border-left:0; border-top:1px solid var(--hair);
+          padding: var(--s-4) var(--s-4) 24px;
+          overflow:auto;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior: contain;
+          scrollbar-width: none; /* Firefox */
+          -ms-overflow-style: none; /* IE/Edge */
+        }
+        #ui::-webkit-scrollbar{ display:none; }
+        /* Keep desktop-style single column groups and 3-col rows on mobile */
+      }
+      @media (max-width: 380px){ #ui{ padding-left:12px; padding-right:12px; } }
+
+      /* Frame button on canvas */
+      #focusBtn{ position:absolute; top:10px; right:10px; z-index:5; width:34px; height:34px; display:flex; align-items:center; justify-content:center; background: rgba(0,0,0,0.45); border:1px solid var(--hair); border-radius:8px; cursor:pointer; }
+      #focusBtn:hover{ background: rgba(255,255,255,0.08); }
+    </style>
+  </head>
+  <body>
+    <div id="wrap">
+      <div id="stage">
+        <div id="focusBtn" title="Frame (F)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#e6e6e6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M12 3v3M12 18v3M3 12h3M18 12h3"></path>
+            <rect x="4" y="4" width="16" height="16" rx="2" ry="2" fill="none"></rect>
+          </svg>
+        </div>
+        <canvas id="gl"></canvas>
+      </div>
+      <aside id="ui">
+        <h3>Minimal Ray-Traced Sphere</h3>
+        <div class="group">
+          <div class="file" id="objDrop">
+            <div><strong>Load OBJ Model</strong></div>
+            <div class="hint">Select or drop a .obj file (small/medium poly recommended)</div>
+            <input id="objFile" type="file" accept=".obj" style="display:none" />
+          </div>
+          <div class="row"><label>Mesh Preset</label>
+            <select id="meshPreset" style="width:100%; background:#0f131b; color:#e6e6e6; border:1px solid #232938; border-radius:6px; padding:4px 6px;">
+              <option value="">Select…</option>
+              <option value="https://rawcdn.githack.com/mrdoob/three.js/master/examples/models/obj/suzanne.obj">Suzanne (low)</option>
+              <option value="https://rawcdn.githack.com/mrdoob/three.js/master/examples/models/obj/walt/WaltHead.obj" selected>Head (Walt)</option>
+            </select>
+          </div>
+          <div class="file" id="envDrop">
+            <div><strong>Environment Image (Equirect)</strong></div>
+            <div class="hint">Drop PNG/JPG (LDR). HDR support is enabled via presets.</div>
+            <input id="envFile" type="file" accept="image/*" style="display:none" />
+          </div>
+          <div class="row"><label>HDRI Preset</label>
+            <select id="envPreset" style="width:100%; background:#0f131b; color:#e6e6e6; border:1px solid #232938; border-radius:6px; padding:4px 6px;">
+              <option value="">Select…</option>
+              <option value="https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_03_1k.hdr">PolyHaven: studio_small_03 (HDR 1k)</option>
+              <option value="https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kiara_1_dawn_1k.hdr">PolyHaven: kiara_1_dawn (HDR 1k)</option>
+              <option value="https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/venice_sunset_1k.hdr">PolyHaven: venice_sunset (HDR 1k)</option>
+            </select>
+          </div>
+          <div class="row"><label>Env Rot (°)</label><input id="envRot" type="range" min="0" max="360" step="0.1" value="0" /><small id="envRot_v">0.0</small></div>
+          <div class="row"><label>Env Rot anim (°/s)</label><input id="envRotSpeed" type="range" min="0" max="30" step="0.1" value="0" /><small id="envRotSpeed_v">0.0</small></div>
+        </div>
+        <div class="group">
+          <div class="row"><label>Object</label>
+            <select id="objectType" style="width:100%; background:#0f131b; color:#e6e6e6; border:1px solid #232938; border-radius:6px; padding:4px 6px;">
+              <option value="sphere">Sphere</option>
+              <option value="mesh" selected>Mesh (OBJ)</option>
+            </select>
+          </div>
+          <div class="row"><label>Sphere radius</label><input id="sphereR" type="range" min="0.1" max="1.2" step="0.01" value="0.6" /><small id="sphereR_v">0.60</small></div>
+        </div>
+        <div class="group">
+          <div class="row"><label>Albedo</label><input id="albedo" type="color" value="#b3b3ff" /><small>&nbsp;</small></div>
+          <div class="row"><label>Metallic</label><input id="metallic" type="range" min="0" max="1" step="0.001" value="0.77" /><small id="metallic_v">0.77</small></div>
+          <div class="row"><label>Roughness</label><input id="roughness" type="range" min="0.02" max="1" step="0.001" value="0.31" /><small id="roughness_v">0.31</small></div>
+          <div class="row"><label>Specular</label><input id="specular" type="range" min="0" max="1" step="0.001" value="0.76" /><small id="specular_v">0.76</small></div>
+          <div class="row"><label>IOR</label><input id="ior" type="range" min="1.0" max="2.5" step="0.001" value="2.5" /><small id="ior_v">2.50</small></div>
+          <div class="row"><label>Clearcoat</label><input id="clearcoat" type="range" min="0" max="1" step="0.001" value="0.0" /><small id="clearcoat_v">0.00</small></div>
+          <div class="row"><label>Clearcoat Rough.</label><input id="clearcoatRough" type="range" min="0.02" max="1" step="0.001" value="0.1" /><small id="clearcoatRough_v">0.10</small></div>
+        </div>
+        <div class="group">
+          <div class="row"><label>Exposure</label><input id="exposure" type="range" min="0.1" max="4" step="0.01" value="0.68" /><small id="exposure_v">0.68</small></div>
+          <div class="row"><label>Gamma</label><input id="gamma" type="range" min="1.8" max="2.6" step="0.01" value="2.17" /><small id="gamma_v">2.17</small></div>
+          <div class="row"><label>SPP / frame</label><input id="spp" type="range" min="1" max="8" step="1" value="8" /><small id="spp_v">8</small></div>
+          <div class="row"><label>Max SPP (accum)</label><input id="maxspp" type="range" min="32" max="1024" step="1" value="1024" /><small id="maxspp_v">1024</small></div>
+          <div class="row"><label>Resolution scale</label><input id="scale" type="range" min="0.3" max="1" step="0.01" value="1" /><small id="scale_v">1.00</small></div>
+        </div>
+        <div class="footer">
+          <div><span class="kbd">LMB</span> orbit • <span class="kbd">MMB</span> pan • <span class="kbd">Wheel</span> zoom</div>
+          <div class="mono" id="stat">SPP: 0 | Avg FPS: –</div>
+        </div>
+      </aside>
+    </div>
+
+    <script>
+      const canvas = document.getElementById('gl');
+      const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, desynchronized: true });
+      if (!gl) { alert('WebGL2 gerekli.'); }
+
+      // Resize handling with resolution scale
+      const state = {
+        width: 0, height: 0, scale: 1,
+        frame: 0, accumNeedsReset: true, samplesPerFrame: 1,
+        envTex: null, envRes: [0,0], envRotDeg: 0, hasEnv: false,
+        camera: { theta: 0.9, phi: 0.9, dist: 3.0, target: [0,0,0] },
+        mouse: {x:0,y:0, downL:false, downM:false},
+        stats: { frames:0, last: performance.now(), fpsAcc:0 },
+        canAccumulate: true,
+        maxFrames: 512,
+        isMoving: false
+      };
+
+      // Capabilities
+      const extColorBufferFloat = gl.getExtension('EXT_color_buffer_float');
+      state.canAccumulate = !!extColorBufferFloat; // RGBA16F render target
+
+      function resizeCanvas() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const w = Math.floor(canvas.clientWidth * state.scale * dpr);
+        const h = Math.floor(canvas.clientHeight * state.scale * dpr);
+        if (w !== state.width || h !== state.height) {
+          state.width = w; state.height = h;
+          canvas.width = w; canvas.height = h;
+          gl.viewport(0, 0, w, h);
+          createOrResizeTargets();
+          state.accumNeedsReset = true;
+        }
+      }
+
+      // Shaders
+      const quadVS = `#version 300 es
+      precision highp float;
+      const vec2 verts[3] = vec2[3](vec2(-1.0,-1.0), vec2(3.0,-1.0), vec2(-1.0,3.0));
+      out vec2 vUV;
+      void main(){
+        vec2 p = verts[gl_VertexID];
+        vUV = p * 0.5 + 0.5;
+        gl_Position = vec4(p, 0.0, 1.0);
+      }`;
+
+      const tracerFS = `#version 300 es
+      precision highp float;
+      out vec4 fragColor;
+      in vec2 vUV;
+
+      uniform vec2 uResolution;
+      uniform int uFrame;
+      uniform sampler2D uAccum;
+      uniform bool uUseAccum;
+      uniform vec3 uCamPos;
+      uniform mat3 uCamBasis; // columns: right, up, forward
+      uniform float uTime;
+      uniform float uExposure;
+      uniform float uGamma;
+      uniform int uSPP;
+      uniform bool uDoTonemap;
+      uniform float uSphereR;
+
+      uniform vec3 uAlbedo;
+      uniform float uMetallic;
+      uniform float uRoughness;
+      uniform float uSpecular;
+      uniform float uIOR;
+      uniform float uClearcoat;
+      uniform float uClearcoatRoughness;
+
+      uniform bool uHasEnv;
+      uniform sampler2D uEnv;
+      uniform vec2 uEnvRes;
+      uniform float uEnvRot;
+      // IBL sampling CDFs
+      uniform sampler2D uEnvCondCDF; // size: (W,H) cdf along X per row in R
+      uniform sampler2D uEnvMargCDF; // size: (H,1) cdf along Y in R
+      uniform vec2 uEnvCDFSize; // (W,H) of CDF grid
+
+      uniform bool uGroundOn;
+      uniform float uGroundRough;
+
+      // Hashes & random (float-based, widely compatible)
+      float hash11(float p){ p = fract(p*0.1031); p *= p + 33.33; p *= p + p; return fract(p); }
+      vec2 hash22(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.xx+p3.yz)*p3.zy); }
+
+      // Sampling
+      vec3 sampleHemisphereCosine(vec2 u, vec3 n){
+        float phi = 6.2831853 * u.x;
+        float r = sqrt(u.y);
+        vec3 t = normalize(abs(n.z) < 0.999 ? cross(n, vec3(0,0,1)) : cross(n, vec3(0,1,0)));
+        vec3 b = cross(n, t);
+        vec3 h = vec3(r*cos(phi), r*sin(phi), sqrt(max(0.0, 1.0 - u.y)));
+        return normalize(h.x * t + h.y * b + h.z * n);
+      }
+
+      vec3 sampleGGX(vec2 u, float alpha, vec3 n){
+        float a2 = alpha*alpha;
+        float phi = 6.2831853 * u.x;
+        float cosTheta = sqrt((1.0 - u.y) / (1.0 + (a2 - 1.0) * u.y));
+        float sinTheta = sqrt(max(0.0, 1.0 - cosTheta*cosTheta));
+        vec3 t = normalize(abs(n.z) < 0.999 ? cross(n, vec3(0,0,1)) : cross(n, vec3(0,1,0)));
+        vec3 b = cross(n, t);
+        vec3 h = vec3(sinTheta*cos(phi), sinTheta*sin(phi), cosTheta);
+        return normalize(h.x * t + h.y * b + h.z * n);
+      }
+
+      // PBR helpers
+      float saturate(float x){ return clamp(x, 0.0, 1.0); }
+      vec2  saturate(vec2 x){ return clamp(x, 0.0, 1.0); }
+      vec3  saturate(vec3 x){ return clamp(x, 0.0, 1.0); }
+      vec4  saturate(vec4 x){ return clamp(x, 0.0, 1.0); }
+      float D_GGX(float NdotH, float a){ float a2 = a*a; float d = (NdotH*NdotH)*(a2 - 1.0) + 1.0; return a2 / (3.14159265 * d*d); }
+      float G_SchlickGGX(float NdotV, float k){ return NdotV / (NdotV * (1.0 - k) + k); }
+      float G_Smith(float NdotV, float NdotL, float rough){ float k = (rough + 1.0); k = (k*k) / 8.0; return G_SchlickGGX(NdotL, k) * G_SchlickGGX(NdotV, k); }
+      vec3 F_Schlick(vec3 F0, float VdotH){ return F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0); }
+
+      // Env sampling (equirect, Y-up, Z-forward). Rotation around Y.
+      vec3 sampleEnvMap(vec3 d){
+        if (!uHasEnv) {
+          // Procedural sky: horizon boost + bluish zenith
+          float t = saturate(d.y * 0.5 + 0.5);
+          vec3 zenith = vec3(0.32, 0.45, 0.68);
+          vec3 horizon = vec3(0.85, 0.75, 0.65);
+          return mix(horizon, zenith, pow(t, 0.7));
+        }
+        float rot = uEnvRot; // radians
+        float c = cos(rot), s = sin(rot);
+        vec3 dr = vec3(c*d.x + s*d.z, d.y, -s*d.x + c*d.z);
+        float phi = atan(dr.z, dr.x); // [-pi,pi]
+        float theta = acos(clamp(dr.y, -1.0, 1.0)); // [0,pi]
+        float u = fract((phi + 3.14159265) / (2.0*3.14159265)); // wrap horizontally
+        float v = clamp(theta / 3.14159265, 0.0, 1.0);
+        // Basic sampling; assume sRGB, we will approx linearization later (cheap)
+        vec3 tex = texture(uEnv, vec2(u, v)).rgb;
+        // Pretend as already in linear (keep simple in MVP)
+        return tex;
+      }
+
+      // Binary search helpers over 1D CDF stored in texture
+      float tex1D(sampler2D t, float idx, float size, float row){
+        return texture(t, vec2((idx+0.5)/size, row)).r;
+      }
+      int binarySearchCDF(sampler2D t, float size, float row, float u){
+        int lo = 0; int hi = int(size-1.0);
+        for(int it=0; it<12; ++it){
+          int mid = (lo + hi) >> 1;
+          float cmid = tex1D(t, float(mid), size, row);
+          if (cmid < u) lo = mid + 1; else hi = mid;
+          if (lo>=hi) break;
+        }
+        return lo;
+      }
+
+      // Sample environment direction using precomputed CDFs
+      void sampleEnvDirection(vec2 urand, out vec3 dir, out float pdf){
+        float W = uEnvCDFSize.x, H = uEnvCDFSize.y;
+        if (W < 1.0 || H < 1.0) { dir = vec3(0,1,0); pdf = 1.0/(4.0*3.14159265); return; }
+        // pick row via marginal CDF over v
+        int iy = binarySearchCDF(uEnvMargCDF, H, 0.5, urand.y);
+        float vy = (float(iy)+0.5)/H;
+        // pick column via conditional CDF on that row
+        int ix = binarySearchCDF(uEnvCondCDF, W, vy, urand.x);
+        float ux = (float(ix)+0.5)/W;
+        // convert (ux, vy) to direction
+        float phi = ux * 2.0*3.14159265 - 3.14159265;
+        float theta = vy * 3.14159265;
+        vec3 d = vec3(cos(phi)*sin(theta), cos(theta), sin(phi)*sin(theta));
+        // apply Y-rotation same as lookup
+        float rot = uEnvRot; float c = cos(rot), s = sin(rot);
+        dir = normalize(vec3(c*d.x - s*d.z, d.y, s*d.x + c*d.z));
+        // approximate pdf from finite differences
+        float cdfy0 = (iy>0) ? tex1D(uEnvMargCDF, float(iy-1), H, 0.5) : 0.0;
+        float cdfy1 = tex1D(uEnvMargCDF, float(iy), H, 0.5);
+        float py = max(1e-6, cdfy1 - cdfy0);
+        float cdfx0 = (ix>0) ? tex1D(uEnvCondCDF, float(ix-1), W, vy) : 0.0;
+        float cdfx1 = tex1D(uEnvCondCDF, float(ix), W, vy);
+        float px = max(1e-6, cdfx1 - cdfx0);
+        pdf = px * py * W * H; // account for discrete bins to solid angle approx
+      }
+
+      // Ray structures
+      struct Hit { bool hit; float t; vec3 n; vec3 p; int id; };
+
+      // BVH + Triangles
+      uniform bool uUseMesh;
+      uniform sampler2D uTriTex; // width = triCount, height = 6 rows (posA,B,C, normA,B,C)
+      uniform int uTriCount;
+      uniform int uTriTexW;
+      uniform sampler2D uBVHTex; // width = nodeCount, height = 3 rows
+      uniform int uBVHNodeCount;
+      uniform int uBVHTexW;
+
+      void getTriangle(int i, out vec3 a, out vec3 b, out vec3 c, out vec3 na, out vec3 nb, out vec3 nc){
+        float x = (float(i) + 0.5) / float(uTriTexW);
+        a  = texture(uTriTex, vec2(x, (0.5)/6.0)).rgb;
+        b  = texture(uTriTex, vec2(x, (1.5)/6.0)).rgb;
+        c  = texture(uTriTex, vec2(x, (2.5)/6.0)).rgb;
+        na = texture(uTriTex, vec2(x, (3.5)/6.0)).rgb;
+        nb = texture(uTriTex, vec2(x, (4.5)/6.0)).rgb;
+        nc = texture(uTriTex, vec2(x, (5.5)/6.0)).rgb;
+      }
+
+      void getNode(int idx, out vec3 bmin, out vec3 bmax, out bool isLeaf, out int left, out int right, out int start, out int count){
+        float x = (float(idx) + 0.5) / float(uBVHTexW);
+        vec4 r0 = texture(uBVHTex, vec2(x, (0.5)/3.0));
+        vec4 r1 = texture(uBVHTex, vec2(x, (1.5)/3.0));
+        vec4 r2 = texture(uBVHTex, vec2(x, (2.5)/3.0));
+        bmin = r0.xyz; bmax = r1.xyz; isLeaf = (r0.w > 0.5);
+        if (isLeaf) { start = int(r1.w + 0.5); count = int(r2.x + 0.5); left = right = -1; }
+        else { left = int(r1.w + 0.5); right = int(r2.x + 0.5); start = 0; count = 0; }
+      }
+
+      bool rayAABB(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax, out float tnear){
+        vec3 inv = 1.0 / rd;
+        vec3 t0 = (bmin - ro) * inv;
+        vec3 t1 = (bmax - ro) * inv;
+        vec3 tsm = min(t0, t1);
+        vec3 tsM = max(t0, t1);
+        float tN = max(max(tsm.x, tsm.y), tsm.z);
+        float tF = min(min(tsM.x, tsM.y), tsM.z);
+        tnear = tN;
+        return tF >= max(tN, 0.0);
+      }
+
+      // Moller-Trumbore
+      Hit rayTriangle(vec3 ro, vec3 rd, vec3 a, vec3 b, vec3 c, vec3 na, vec3 nb, vec3 nc, int id){
+        vec3 ab = b - a; vec3 ac = c - a; vec3 p = cross(rd, ac);
+        float det = dot(ab, p);
+        if (abs(det) < 1e-7) return Hit(false, 1e9, vec3(0), vec3(0), -1);
+        float invDet = 1.0 / det;
+        vec3 tvec = ro - a; float u = dot(tvec, p) * invDet; if (u < 0.0 || u > 1.0) return Hit(false, 1e9, vec3(0), vec3(0), -1);
+        vec3 q = cross(tvec, ab); float v = dot(rd, q) * invDet; if (v < 0.0 || u + v > 1.0) return Hit(false, 1e9, vec3(0), vec3(0), -1);
+        float t = dot(ac, q) * invDet; if (t <= 0.0) return Hit(false, 1e9, vec3(0), vec3(0), -1);
+        vec3 n = normalize(na * (1.0 - u - v) + nb * u + nc * v);
+        vec3 pHit = ro + rd * t;
+        return Hit(true, t, n, pHit, id);
+      }
+      
+
+      Hit raySphere(vec3 ro, vec3 rd, vec3 c, float r, int id){
+        vec3 oc = ro - c; float b = dot(oc, rd); float c2 = dot(oc, oc) - r*r; float h = b*b - c2; 
+        if (h < 0.0) return Hit(false, 1e9, vec3(0), vec3(0), -1);
+        h = sqrt(h);
+        float t = -b - h; if (t < 0.0) t = -b + h; if (t < 0.0) return Hit(false, 1e9, vec3(0), vec3(0), -1);
+        vec3 p = ro + rd * t; vec3 n = normalize(p - c);
+        return Hit(true, t, n, p, id);
+      }
+
+      Hit rayPlane(vec3 ro, vec3 rd, vec3 n, float h, int id){ // n dot x = h
+        float dn = dot(rd, n);
+        if (abs(dn) < 1e-5) return Hit(false, 1e9, vec3(0), vec3(0), -1);
+        float t = (h - dot(ro, n)) / dn; if (t < 0.0) return Hit(false, 1e9, vec3(0), vec3(0), -1);
+        vec3 p = ro + rd * t; return Hit(true, t, n, p, id);
+      }
+
+      vec3 tonemapACES(vec3 x){
+        // Narkowicz ACES approx
+        const float a = 2.51; const float b = 0.03; const float c = 2.43; const float d = 0.59; const float e = 0.14;
+        return saturate((x*(a*x+b)) / (x*(c*x+d)+e));
+      }
+
+      void main(){
+        vec2 pixel = vUV * uResolution;
+        vec2 fragCoord = pixel;
+        vec2 baseRand = hash22(vec2(float(uFrame) + fragCoord.x + fragCoord.y*1.37, fragCoord.x*0.7 + fragCoord.y*1.3));
+
+        // Jitter AA
+        vec2 jitter = (hash22(baseRand + vec2(0.31,0.87)) - 0.5) / uResolution;
+        vec2 uv = (fragCoord + jitter) / uResolution * 2.0 - 1.0;
+        uv.x *= uResolution.x / max(1.0, uResolution.y);
+
+        // Build camera ray
+        vec3 rd = normalize(uCamBasis * normalize(vec3(uv, 1.0)));
+        vec3 ro = uCamPos;
+
+        // Scene intersections
+        Hit best = Hit(false, 1e9, vec3(0), vec3(0), -1);
+        if (uUseMesh) {
+          // BVH traversal
+          int stack[64]; int sp = 0; stack[sp++] = 0; // root
+          for (int iter=0; iter<1024; ++iter){
+            if (sp <= 0) break; int ni = stack[--sp];
+            vec3 bmin, bmax; bool isLeaf; int left; int right; int start; int count;
+            getNode(ni, bmin, bmax, isLeaf, left, right, start, count);
+            float tnear; if (!rayAABB(ro, rd, bmin, bmax, tnear) || tnear > best.t) continue;
+            if (isLeaf) {
+              for (int k=0; k<1024; ++k){ if (k>=count) break; int triIndex = start + k; if (triIndex >= uTriCount) break; vec3 a,b,c,na,nb,nc; getTriangle(triIndex, a,b,c, na,nb,nc); Hit h = rayTriangle(ro, rd, a,b,c, na,nb,nc, 10); if (h.hit && h.t < best.t) best = h; }
+            } else {
+              // Near-first push
+              float tnl, tnr; vec3 lbmin, lbmax, rbmin, rbmax; bool lleaf; int lc, rc, ls, rs; getNode(left, lbmin, lbmax, lleaf, lc, rc, ls, rs); getNode(right, rbmin, rbmax, lleaf, lc, rc, ls, rs); bool hitL = rayAABB(ro, rd, lbmin, lbmax, tnl); bool hitR = rayAABB(ro, rd, rbmin, rbmax, tnr);
+              if (hitL && hitR){ if (tnl < tnr) { stack[sp++] = right; stack[sp++] = left; } else { stack[sp++] = left; stack[sp++] = right; } }
+              else if (hitL) { stack[sp++] = left; }
+              else if (hitR) { stack[sp++] = right; }
+            }
+          }
+        } else {
+          float R = max(0.05, uSphereR);
+          best = raySphere(ro, rd, vec3(0.0, 0.6, 0.0), R, 1);
+        }
+        if (uGroundOn) {
+          Hit g = rayPlane(ro, rd, vec3(0,1,0), 0.0, 2);
+          if (g.hit && (!best.hit || g.t < best.t)) best = g;
+        }
+
+        vec3 col = vec3(0.0);
+        int spp = max(1, uSPP);
+        for (int s=0; s<64; ++s){
+          if (s >= spp) break;
+          vec2 urand = hash22(baseRand + vec2(float(s)*1.213, float(s)*3.411));
+
+          if (!best.hit) {
+            col += sampleEnvMap(rd);
+          } else {
+            vec3 n = best.n; vec3 p = best.p;
+            vec3 v = normalize(-rd);
+
+            // Material
+            vec3 baseColor = uAlbedo;
+            float metal = saturate(uMetallic);
+            float rough = clamp(uRoughness, 0.02, 1.0);
+            float clearc = saturate(uClearcoat);
+            float clearcR = clamp(uClearcoatRoughness, 0.02, 1.0);
+            float specW = saturate(uSpecular);
+
+            // F0
+            float outsideIOR = 1.0; float eta = uIOR / outsideIOR;
+            float f0Dielectric = pow((eta - 1.0) / (eta + 1.0), 2.0);
+            vec3 F0 = mix(vec3(f0Dielectric), baseColor, metal);
+            F0 = mix(F0, vec3(specW), 0.04); // allow user spec tweak subtly
+
+            // Diffuse sample
+            vec3 Ld = vec3(0);
+            if (best.id == 2) {
+              // Ground: slightly darker albedo and higher roughness feel
+              vec3 gAlbedo = baseColor * 0.9;
+              vec3 ldir = sampleHemisphereCosine(urand, n);
+              float NdotL = max(0.0, dot(n, ldir));
+              vec3 env = sampleEnvMap(ldir);
+              Ld = gAlbedo * env * NdotL / 3.14159265;
+              // Simple specular from ground
+              vec3 h = sampleGGX(urand.yx, max(0.02, uGroundRough), n);
+              vec3 ldirS = normalize(reflect(-v, h));
+              float NdotL2 = max(0.0, dot(n, ldirS));
+              if (NdotL2 > 0.0) {
+                float NdotH = max(0.0, dot(n, h));
+                float VdotH = max(0.0, dot(v, h));
+                float NdotV = max(0.0, dot(n, v));
+                float D = D_GGX(NdotH, max(0.02, uGroundRough));
+                float G = G_Smith(NdotV, NdotL2, max(0.02, uGroundRough));
+                vec3  F = F_Schlick(vec3(0.04), VdotH);
+                vec3 env2 = sampleEnvMap(ldirS);
+                vec3 spec = (D*G*F) / max(0.001, 4.0*NdotL2*NdotV);
+                Ld += env2 * spec * NdotL2;
+              }
+            } else {
+              // Object BRDF integration (env importance sample)
+              // Diffuse
+              vec3 ldirD; float pdfD; sampleEnvDirection(urand, ldirD, pdfD);
+              float NdotL = max(0.0, dot(n, ldirD));
+              if (NdotL > 0.0 && pdfD > 0.0) {
+                vec3 envD = sampleEnvMap(ldirD);
+                vec3 diffuseColor = baseColor * (1.0 - metal);
+                Ld += diffuseColor * envD * (NdotL / 3.14159265) / pdfD;
+              }
+
+              // Specular GGX (sample half-vector then reflect)
+              vec3 h = sampleGGX(urand.yx, rough, n);
+              vec3 ldir = normalize(reflect(-v, h));
+              float NdotL2 = max(0.0, dot(n, ldir));
+              if (NdotL2 > 0.0) {
+                float NdotH = max(0.0, dot(n, h));
+                float VdotH = max(0.0, dot(v, h));
+                float NdotV = max(0.0, dot(n, v));
+                float D = D_GGX(NdotH, rough);
+                float G = G_Smith(NdotV, NdotL2, rough);
+                vec3  F = F_Schlick(F0, VdotH);
+                vec3 env = sampleEnvMap(ldir);
+                vec3 spec = (D*G*F) / max(0.001, 4.0*NdotL2*NdotV);
+                Ld += env * spec * NdotL2;
+              }
+
+              // Clearcoat (secondary lobe, dielectric ~0.04)
+              if (clearc > 0.001) {
+                vec3 hc = sampleGGX(urand.yx + 0.37, clearcR, n);
+                vec3 ldirC = normalize(reflect(-v, hc));
+                float NdotL3 = max(0.0, dot(n, ldirC));
+                if (NdotL3 > 0.0) {
+                  float NdotHc = max(0.0, dot(n, hc));
+                  float VdotHc = max(0.0, dot(v, hc));
+                  float NdotV = max(0.0, dot(n, v));
+                  float D = D_GGX(NdotHc, clearcR);
+                  float G = G_Smith(NdotV, NdotL3, clearcR);
+                  vec3  F = F_Schlick(vec3(0.04), VdotHc);
+                  vec3 env = sampleEnvMap(ldirC);
+                  vec3 spec = (D*G*F) / max(0.001, 4.0*NdotL3*NdotV);
+                  Ld += clearc * env * spec * NdotL3;
+                }
+              }
+            }
+
+            col += Ld;
+          }
+        }
+
+        col /= float(spp);
+
+        // Accumulate in linear domain
+        if (uUseAccum && uFrame > 0) {
+          vec3 prev = texture(uAccum, vUV).rgb;
+          float m = float(uFrame);
+          col = (prev * m + col) / (m + 1.0);
+        }
+
+        if (uDoTonemap) {
+          col *= uExposure;
+          col = tonemapACES(max(vec3(0.0), col));
+          col = pow(col, vec3(1.0 / uGamma));
+        }
+        fragColor = vec4(col, 1.0);
+      }`;
+
+      const blitFS = `#version 300 es
+      precision highp float; in vec2 vUV; out vec4 fragColor; uniform sampler2D uTex; uniform float uExposure; uniform float uGamma; 
+      vec3 tonemapACES(vec3 x){ const float a=2.51; const float b=0.03; const float c=2.43; const float d=0.59; const float e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0);} 
+      void main(){ vec3 col = texture(uTex, vUV).rgb; col *= uExposure; col = tonemapACES(max(vec3(0.0), col)); col = pow(col, vec3(1.0/uGamma)); fragColor = vec4(col,1.0);} `;
+
+      function createShader(type, src){ const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); throw new Error('Shader compile failed'); } return s; }
+      function createProgram(vsSrc, fsSrc){ const p = gl.createProgram(); gl.attachShader(p, createShader(gl.VERTEX_SHADER, vsSrc)); gl.attachShader(p, createShader(gl.FRAGMENT_SHADER, fsSrc)); gl.bindAttribLocation(p, 0, 'position'); gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(p)); throw new Error('Program link failed'); } return p; }
+
+      const tracerProg = createProgram(quadVS, tracerFS);
+      const blitProg = createProgram(quadVS, blitFS);
+
+      // Quad VAO
+      const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+
+      // Minimal OBJ store (placeholder for future BVH)
+      const mesh = { vertices: [], indices: [], normals: [], aabb: [0,0,0,0,0,0] };
+      let bvh = { nodes: null, tex: null, texW: 0, nodeCount: 0 };
+
+      // BVH node layout: bmin.xyz, leafFlag; bmax.xyz, leftOrStart; misc.x(rightOrCount)
+      function buildBVH(vertices, indices){
+        const tris = new Array(Math.floor(indices.length/3));
+        for (let i=0;i<tris.length;i++){
+          const ia=indices[i*3+0]*3, ib=indices[i*3+1]*3, ic=indices[i*3+2]*3;
+          const a=[vertices[ia],vertices[ia+1],vertices[ia+2]];
+          const b=[vertices[ib],vertices[ib+1],vertices[ib+2]];
+          const c=[vertices[ic],vertices[ic+1],vertices[ic+2]];
+          const bmin=[Math.min(a[0],b[0],c[0]), Math.min(a[1],b[1],c[1]), Math.min(a[2],b[2],c[2])];
+          const bmax=[Math.max(a[0],b[0],c[0]), Math.max(a[1],b[1],c[1]), Math.max(a[2],b[2],c[2])];
+          const center=[(bmin[0]+bmax[0])/2,(bmin[1]+bmax[1])/2,(bmin[2]+bmax[2])/2];
+          tris[i]={i, a, b, c, bmin, bmax, center};
+        }
+
+        const nodes=[]; const triIndices = tris.map(t=>t.i);
+        function build(list){
+          // compute bounds
+          let bmin=[Infinity,Infinity,Infinity], bmax=[-Infinity,-Infinity,-Infinity];
+          for(const idx of list){ const t=tris[idx]; for(let k=0;k<3;k++){ if(t.bmin[k]<bmin[k]) bmin[k]=t.bmin[k]; if(t.bmax[k]>bmax[k]) bmax[k]=t.bmax[k]; } }
+          const nodeIndex = nodes.length; nodes.push({bmin,bmax,leaf:false,left:-1,right:-1,start:0,count:0});
+          if (list.length<=8){ nodes[nodeIndex].leaf=true; nodes[nodeIndex].start = triIndices.length; nodes[nodeIndex].count = list.length; for(const idx of list) triIndices.push(idx); return nodeIndex; }
+          const extent=[bmax[0]-bmin[0], bmax[1]-bmin[1], bmax[2]-bmin[2]]; let axis=0; if(extent[1]>extent[axis]) axis=1; if(extent[2]>extent[axis]) axis=2;
+          list.sort((i1,i2)=>tris[i1].center[axis]-tris[i2].center[axis]);
+          const mid = (list.length>>1);
+          const leftList = list.slice(0, mid); const rightList = list.slice(mid);
+          const li = build(leftList); const ri = build(rightList);
+          nodes[nodeIndex].left=li; nodes[nodeIndex].right=ri; return nodeIndex;
+        }
+        build([...triIndices.splice(0,tris.length)]);
+
+        // Pack nodes into float texture rows
+        const nodeCount = nodes.length;
+        const width = nodeCount; const height = 3; const data = new Float32Array(width*height*4);
+        for (let i=0;i<nodeCount;i++){
+          const n=nodes[i];
+          data[(0*width+i)*4+0]=n.bmin[0]; data[(0*width+i)*4+1]=n.bmin[1]; data[(0*width+i)*4+2]=n.bmin[2]; data[(0*width+i)*4+3]=n.leaf?1:0;
+          data[(1*width+i)*4+0]=n.bmax[0]; data[(1*width+i)*4+1]=n.bmax[1]; data[(1*width+i)*4+2]=n.bmax[2]; data[(1*width+i)*4+3]=n.leaf? n.start : n.left;
+          data[(2*width+i)*4+0]=n.leaf? n.count : n.right; data[(2*width+i)*4+1]=0; data[(2*width+i)*4+2]=0; data[(2*width+i)*4+3]=0;
+        }
+        return { nodes, triOrder: triIndices, texData: data, width, nodeCount };
+      }
+
+      // Framebuffer ping-pong for accumulation
+      const targets = { a: null, b: null, fboA: null, fboB: null };
+      function createTex(w, h){
+        const t = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        if (state.canAccumulate) {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+        } else {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        }
+        return t;
+      }
+      function createFBO(tex){ const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0); const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER); if (status !== gl.FRAMEBUFFER_COMPLETE) { console.warn('FBO incomplete:', status.toString(16)); } gl.bindFramebuffer(gl.FRAMEBUFFER, null); return f; }
+      function createOrResizeTargets(){
+        const w = Math.max(1, state.width), h = Math.max(1, state.height);
+        if (targets.a) gl.deleteTexture(targets.a);
+        if (targets.b) gl.deleteTexture(targets.b);
+        if (targets.fboA) gl.deleteFramebuffer(targets.fboA);
+        if (targets.fboB) gl.deleteFramebuffer(targets.fboB);
+        targets.a = createTex(w, h); targets.b = createTex(w, h);
+        targets.fboA = createFBO(targets.a); targets.fboB = createFBO(targets.b);
+
+        // Validate FBO completeness; if not complete, disable accumulation
+        gl.bindFramebuffer(gl.FRAMEBUFFER, targets.fboB);
+        const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        if (status !== gl.FRAMEBUFFER_COMPLETE) {
+          console.warn('Accumulation FBO not complete, falling back to direct render. Status:', status.toString(16));
+          state.canAccumulate = false;
+        }
+      }
+
+      // UI wiring
+      function hexToRgb(hex){ const h = hex.replace('#',''); const bi = parseInt(h, 16); return [(bi>>16)&255, (bi>>8)&255, bi&255].map(v=>v/255); }
+
+      const ui = {
+        albedo: document.getElementById('albedo'),
+        metallic: document.getElementById('metallic'),
+        roughness: document.getElementById('roughness'),
+        specular: document.getElementById('specular'),
+        ior: document.getElementById('ior'),
+        clearcoat: document.getElementById('clearcoat'),
+        clearcoatRough: document.getElementById('clearcoatRough'),
+        exposure: document.getElementById('exposure'),
+        gamma: document.getElementById('gamma'),
+        spp: document.getElementById('spp'),
+        maxspp: document.getElementById('maxspp'),
+        scale: document.getElementById('scale'),
+        envFile: document.getElementById('envFile'),
+        envDrop: document.getElementById('envDrop'),
+        envRot: document.getElementById('envRot'),
+        objectType: document.getElementById('objectType'),
+        meshPreset: document.getElementById('meshPreset'),
+        sphereR: document.getElementById('sphereR'),
+        objDrop: document.getElementById('objDrop'),
+        objFile: document.getElementById('objFile'),
+        stat: document.getElementById('stat')
+      };
+
+      const labels = {
+        metallic: document.getElementById('metallic_v'),
+        roughness: document.getElementById('roughness_v'),
+        specular: document.getElementById('specular_v'),
+        ior: document.getElementById('ior_v'),
+        exposure: document.getElementById('exposure_v'),
+        gamma: document.getElementById('gamma_v'),
+        spp: document.getElementById('spp_v'),
+        maxspp: document.getElementById('maxspp_v'),
+        scale: document.getElementById('scale_v'),
+        envRot: document.getElementById('envRot_v'),
+        sphereR: document.getElementById('sphereR_v')
+      };
+
+      function fmt(x, n=2){ return (+x).toFixed(n); }
+      function resetAccum(){ state.frame = 0; state.accumNeedsReset = false; }
+      function onChange(){ labels.metallic.textContent = fmt(ui.metallic.value); labels.roughness.textContent = fmt(ui.roughness.value); labels.specular.textContent = fmt(ui.specular.value); labels.ior.textContent = fmt(ui.ior.value); labels.exposure.textContent = fmt(ui.exposure.value); labels.gamma.textContent = fmt(ui.gamma.value); labels.spp.textContent = ui.spp.value; labels.maxspp.textContent = ui.maxspp.value; labels.scale.textContent = fmt(ui.scale.value); labels.envRot.textContent = fmt(ui.envRot.value,1); if (document.getElementById('envRotSpeed')) { labels.envRotSpeed = document.getElementById('envRotSpeed_v'); labels.envRotSpeed.textContent = fmt(document.getElementById('envRotSpeed').value,1);} labels.sphereR.textContent = fmt(ui.sphereR.value); state.samplesPerFrame = parseInt(ui.spp.value); state.maxFrames = parseInt(ui.maxspp.value); state.scale = parseFloat(ui.scale.value); state.envRotDeg = parseFloat(ui.envRot.value); state.envRotSpeed = parseFloat((document.getElementById('envRotSpeed')||{value:0}).value); state.sphereR = parseFloat(ui.sphereR.value); state.isMoving=false; resizeCanvas(); resetAccum(); }
+
+      [ui.metallic, ui.roughness, ui.specular, ui.ior, ui.clearcoat, ui.clearcoatRough, ui.exposure, ui.gamma, ui.spp, ui.maxspp, ui.scale, ui.envRot, document.getElementById('envRotSpeed'), ui.sphereR].filter(Boolean).forEach(el => el.addEventListener('input', onChange));
+      ui.objectType && ui.objectType.addEventListener('change', ()=> { resetAccum(); });
+      ui.albedo.addEventListener('input', resetAccum);
+
+      // Env file upload & drag-drop
+      ui.envDrop.addEventListener('click', ()=> ui.envFile.click());
+      ui.envFile.addEventListener('change', e=> loadEnvFromFile(e.target.files?.[0]));
+      const envPresetEl = document.getElementById('envPreset');
+      if (envPresetEl) {
+        envPresetEl.addEventListener('change', e=> {
+          const url = e.target.value;
+          if (!url) return;
+          if (url.endsWith('.hdr')) {
+            loadHDR(url); // placeholder
+          } else {
+            loadEnvFromUrl(url);
+          }
+        });
+      }
+
+      if (ui.meshPreset) {
+        ui.meshPreset.addEventListener('change', async (e)=>{
+          const url = e.target.value; if (!url) return;
+          try {
+            const res = await fetch(url, { mode: 'cors' });
+            const txt = await res.text();
+            const { vertices, indices } = parseOBJ(txt);
+            mesh.vertices = vertices; mesh.indices = indices; uploadBVHAndTris(); console.log('Mesh preset yüklendi:', vertices.length/3, 'verts');
+            resetAccum();
+          } catch (err) { console.warn('Mesh preset yüklenemedi:', err); }
+        });
+      }
+      ui.envDrop.addEventListener('dragover', e=> { e.preventDefault(); ui.envDrop.style.background = 'rgba(255,255,255,0.05)'; });
+      ui.envDrop.addEventListener('dragleave', e=> { ui.envDrop.style.background = 'transparent'; });
+      ui.envDrop.addEventListener('drop', e=> { e.preventDefault(); ui.envDrop.style.background = 'transparent'; const f = e.dataTransfer.files?.[0]; loadEnvFromFile(f); });
+
+      // OBJ upload UI (placeholder parse)
+      ui.objDrop.addEventListener('click', ()=> ui.objFile.click());
+      ui.objDrop.addEventListener('dragover', e=> { e.preventDefault(); ui.objDrop.style.background = 'rgba(255,255,255,0.05)'; });
+      ui.objDrop.addEventListener('dragleave', e=> { ui.objDrop.style.background = 'transparent'; });
+      ui.objDrop.addEventListener('drop', e=> { e.preventDefault(); ui.objDrop.style.background = 'transparent'; const f = e.dataTransfer.files?.[0]; if (f) loadObjFromFile(f); });
+      ui.objFile.addEventListener('change', e=> loadObjFromFile(e.target.files?.[0]));
+
+      function createEnvTextureFromImage(img){
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+        state.envTex = tex; state.envRes = [img.width, img.height]; state.hasEnv = true; resetAccum();
+      }
+
+      function loadEnvFromFile(file){ if (!file) return; const img = new Image(); img.onload = ()=> createEnvTextureFromImage(img); img.src = URL.createObjectURL(file); }
+      function loadEnvFromUrl(url){ const img = new Image(); img.crossOrigin = 'anonymous'; img.onload = ()=> { console.log('Env yüklendi:', url); createEnvTextureFromImage(img); }; img.onerror = ()=> console.warn('Env yüklenemedi:', url); img.src = url; }
+      // RGBE (.hdr) loader (Radiance) -> float32 equirect texture
+      function parseHDR(arrayBuffer){
+        const bytes = new Uint8Array(arrayBuffer);
+        let pos = 0; function readLine(){ let s=''; while(pos<bytes.length){ const c=bytes[pos++]; if(c===10) break; s+=String.fromCharCode(c);} return s; }
+        let line = readLine(); if(!line.startsWith('#?RADIANCE')) throw new Error('HDR: header not found');
+        let format = '';
+        while(true){ line = readLine(); if(line.length===0) continue; if(line.startsWith('FORMAT=')) format=line.split('=')[1].trim(); if(line==='') continue; if(line==='END') break; if(line[0]==='-') break; if(line[0]==='\0') break; if(line==='\n') break; if(line.startsWith('EXPOSURE=')){} }
+        // Last read likely resolution
+        let resLine = line; if(!resLine.includes('Y ')||!resLine.includes('X ')) { resLine = readLine(); }
+        const m = /-Y\s+(\d+)\s+\+X\s+(\d+)/.exec(resLine); if(!m) throw new Error('HDR: resolution parse');
+        const height = parseInt(m[1],10), width = parseInt(m[2],10);
+        const data = new Float32Array(width*height*4);
+        // Radiance RLE per scanline
+        for(let y=0;y<height;y++){
+          const a = bytes[pos++]; const b=bytes[pos++]; const c=bytes[pos++]; const d=bytes[pos++];
+          if(a!==2||b!==2) throw new Error('HDR: bad RLE');
+          const scanW = (c<<8)|d; if(scanW!==width) throw new Error('HDR: scan width mismatch');
+          const scan = new Uint8Array(width*4);
+          for(let ch=0; ch<4; ch++){
+            let i=0; while(i<width){ const count = bytes[pos++]; if(count>128){ const run = count-128; const val = bytes[pos++]; for(let k=0;k<run;k++) scan[ch*width + i++] = val; } else { let run=count; for(let k=0;k<run;k++) scan[ch*width + i++] = bytes[pos++]; } }
+          }
+          for(let x=0;x<width;x++){
+            const r=scan[0*width+x], g=scan[1*width+x], b2=scan[2*width+x], e=scan[3*width+x];
+            if(e){ const f = Math.pow(2.0, e-128.0-8.0); data[(y*width+x)*4+0]=r*f; data[(y*width+x)*4+1]=g*f; data[(y*width+x)*4+2]=b2*f; data[(y*width+x)*4+3]=1.0; } else { data[(y*width+x)*4+0]=data[(y*width+x)*4+1]=data[(y*width+x)*4+2]=0; data[(y*width+x)*4+3]=1.0; }
+          }
+        }
+        return { width, height, data };
+      }
+      async function loadHDR(url){ try { const res = await fetch(url, { mode:'cors' }); const buf = await res.arrayBuffer(); const {width, height, data} = parseHDR(buf); const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, width, height, 0, gl.RGBA, gl.FLOAT, data); state.envTex = tex; state.envRes=[width,height]; state.hasEnv=true; resetAccum(); console.log('HDR yüklendi:', url);} catch(e){ console.warn('HDR yüklenemedi:', e);} }
+      function loadEnvFromUrls(urls){
+        if (!urls || !urls.length) return;
+        let i = 0;
+        const tryNext = ()=> {
+          if (i >= urls.length) { console.warn('Hiçbir env URL yüklenemedi. Prosedürel gökyüzü kullanılacak.'); return; }
+          const url = urls[i++];
+          const img = new Image(); img.crossOrigin = 'anonymous';
+          img.onload = ()=> { console.log('Env yüklendi:', url); createEnvTextureFromImage(img); };
+          img.onerror = ()=> { console.warn('Env yüklenemedi:', url); tryNext(); };
+          img.src = url;
+        };
+        tryNext();
+      }
+
+      // Very small OBJ parser (vertices only, triangles fan) – placeholder for BVH step
+      function parseOBJ(text){
+        const vs = [];
+        const vns = [];
+        const inds = [];
+        const ninds = [];
+        const lines = text.split(/\r?\n/);
+        for (const line of lines){
+          const t = line.trim(); if (!t || t.startsWith('#')) continue;
+          if (t.startsWith('v ')){
+            const [,x,y,z] = t.split(/\s+/);
+            vs.push(parseFloat(x), parseFloat(y), parseFloat(z));
+          } else if (t.startsWith('vn ')){
+            const [,x,y,z] = t.split(/\s+/);
+            vns.push(parseFloat(x), parseFloat(y), parseFloat(z));
+          } else if (t.startsWith('f ')){
+            const parts = t.split(/\s+/).slice(1);
+            const vids = []; const nids = [];
+            for (const p of parts){ const tok = p.split('/'); vids.push(parseInt(tok[0],10)-1); if (tok.length>=3 && tok[2]) nids.push(parseInt(tok[2],10)-1); }
+            for (let i=1;i+1<vids.length;i++) { inds.push(vids[0], vids[i], vids[i+1]); if (nids.length===vids.length) { ninds.push(nids[0], nids[i], nids[i+1]); } }
+          }
+        }
+        // Normalize and center to unit scale
+        let minx=Infinity,miny=Infinity,minz=Infinity,maxx=-Infinity,maxy=-Infinity,maxz=-Infinity;
+        for (let i=0;i<vs.length;i+=3){ const x=vs[i],y=vs[i+1],z=vs[i+2]; if(x<minx)minx=x; if(y<miny)miny=y; if(z<minz)minz=z; if(x>maxx)maxx=x; if(y>maxy)maxy=y; if(z>maxz)maxz=z; }
+        const cx=(minx+maxx)/2, cy=(miny+maxy)/2, cz=(minz+maxz)/2; const sx=maxx-minx, sy=maxy-miny, sz=maxz-minz; const s = 1.2/Math.max(sx,Math.max(sy,sz));
+        for (let i=0;i<vs.length;i+=3){ vs[i]=(vs[i]-cx)*s; vs[i+1]=(vs[i+1]-cy)*s+0.6; vs[i+2]=(vs[i+2]-cz)*s; }
+        mesh.aabb=[-sx*s/2, -sy*s/2+0.6, -sz*s/2, sx*s/2, sy*s/2+0.6, sz*s/2];
+        // Build per-vertex normals
+        let norms = new Float32Array(vs.length);
+        if (vns.length>0 && ninds.length===inds.length){
+          // Use file normals
+          for (let i=0;i<inds.length;i++){ const vi = inds[i]*3, ni = ninds[i]*3; norms[vi]+=vns[ni]; norms[vi+1]+=vns[ni+1]; norms[vi+2]+=vns[ni+2]; }
+        } else {
+          // Compute face-weighted normals
+          for (let i=0;i<inds.length;i+=3){ const ia=inds[i]*3, ib=inds[i+1]*3, ic=inds[i+2]*3; const ax=vs[ia], ay=vs[ia+1], az=vs[ia+2]; const bx=vs[ib], by=vs[ib+1], bz=vs[ib+2]; const cx2=vs[ic], cy=vs[ic+1], cz=vs[ic+2]; const abx=bx-ax, aby=by-ay, abz=bz-az; const acx=cx2-ax, acy=cy-ay, acz=cz-az; const fnx=aby*acz - abz*acy, fny=abz*acx - abx*acz, fnz=abx*acy - aby*acx; norms[ia]+=fnx; norms[ia+1]+=fny; norms[ia+2]+=fnz; norms[ib]+=fnx; norms[ib+1]+=fny; norms[ib+2]+=fnz; norms[ic]+=fnx; norms[ic+1]+=fny; norms[ic+2]+=fnz; }
+        }
+        for (let i=0;i<norms.length;i+=3){ const l=Math.hypot(norms[i],norms[i+1],norms[i+2])||1; norms[i]/=l; norms[i+1]/=l; norms[i+2]/=l; }
+        return { vertices:new Float32Array(vs), indices:new Uint32Array(inds), normals:norms };
+      }
+      function uploadBVHAndTris(){
+        // Triangles texture
+        if (state.triTex) gl.deleteTexture(state.triTex);
+        const triCount = Math.max(1, Math.floor(mesh.indices.length/3));
+        const tW = triCount; const tH = 6; const triData = new Float32Array(tW*tH*4);
+        for (let i=0;i<triCount;i++){
+          const ia = mesh.indices[i*3+0]*3, ib=mesh.indices[i*3+1]*3, ic=mesh.indices[i*3+2]*3;
+          triData[(0*tW+i)*4+0]=mesh.vertices[ia]||0; triData[(0*tW+i)*4+1]=mesh.vertices[ia+1]||0; triData[(0*tW+i)*4+2]=mesh.vertices[ia+2]||0; triData[(0*tW+i)*4+3]=1;
+          triData[(1*tW+i)*4+0]=mesh.vertices[ib]||0; triData[(1*tW+i)*4+1]=mesh.vertices[ib+1]||0; triData[(1*tW+i)*4+2]=mesh.vertices[ib+2]||0; triData[(1*tW+i)*4+3]=1;
+          triData[(2*tW+i)*4+0]=mesh.vertices[ic]||0; triData[(2*tW+i)*4+1]=mesh.vertices[ic+1]||0; triData[(2*tW+i)*4+2]=mesh.vertices[ic+2]||0; triData[(2*tW+i)*4+3]=1;
+          // per-vertex smooth normals
+          const na = mesh.normals ? [mesh.normals[ia], mesh.normals[ia+1], mesh.normals[ia+2]] : [0,1,0];
+          const nb = mesh.normals ? [mesh.normals[ib], mesh.normals[ib+1], mesh.normals[ib+2]] : [0,1,0];
+          const nc = mesh.normals ? [mesh.normals[ic], mesh.normals[ic+1], mesh.normals[ic+2]] : [0,1,0];
+          triData[(3*tW+i)*4+0]=na[0]; triData[(3*tW+i)*4+1]=na[1]; triData[(3*tW+i)*4+2]=na[2]; triData[(3*tW+i)*4+3]=1;
+          triData[(4*tW+i)*4+0]=nb[0]; triData[(4*tW+i)*4+1]=nb[1]; triData[(4*tW+i)*4+2]=nb[2]; triData[(4*tW+i)*4+3]=1;
+          triData[(5*tW+i)*4+0]=nc[0]; triData[(5*tW+i)*4+1]=nc[1]; triData[(5*tW+i)*4+2]=nc[2]; triData[(5*tW+i)*4+3]=1;
+        }
+        const triTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, triTex); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, tW, tH, 0, gl.RGBA, gl.FLOAT, triData); state.triTex = triTex; state.triTexW = tW; state.triCount = triCount;
+
+        // BVH
+        const built = buildBVH(mesh.vertices, mesh.indices);
+        if (bvh.tex) gl.deleteTexture(bvh.tex);
+        const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, built.width, 3, 0, gl.RGBA, gl.FLOAT, built.texData); bvh.tex = tex; bvh.texW = built.width; bvh.nodeCount = built.nodeCount;
+
+        // Reorder triangles by triOrder (optional small cache benefit)
+        if (built.triOrder && built.triOrder.length === triCount){
+          const triData2 = new Float32Array(triData.length);
+          for(let i=0;i<triCount;i++){
+            const src = built.triOrder[i]; for(let r=0;r<6;r++){ for(let c=0;c<4;c++){ triData2[(r*tW+i)*4+c] = triData[(r*tW+src)*4+c]; } }
+          }
+          gl.bindTexture(gl.TEXTURE_2D, state.triTex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, tW, 6, 0, gl.RGBA, gl.FLOAT, triData2);
+        }
+      }
+
+      function loadObjFromFile(file){ if (!file) return; const reader = new FileReader(); reader.onload = ()=> { const {vertices, indices} = parseOBJ(String(reader.result)); mesh.vertices = vertices; mesh.indices = indices; uploadBVHAndTris(); console.log('OBJ yüklendi:', vertices.length/3, 'verts', indices.length/3, 'tris'); resetAccum(); }; reader.readAsText(file); }
+
+      // Camera controls
+      canvas.addEventListener('mousedown', e=> { if (e.button===0) state.mouse.downL = true; if (e.button===1) state.mouse.downM = true; state.isMoving = true; state.mouse.x = e.clientX; state.mouse.y = e.clientY; });
+      window.addEventListener('mouseup', e=> { if (e.button===0) state.mouse.downL = false; if (e.button===1) state.mouse.downM = false; state.isMoving = false; resetAccum(); });
+      window.addEventListener('mousemove', e=> {
+        const dx = e.clientX - state.mouse.x, dy = e.clientY - state.mouse.y; state.mouse.x = e.clientX; state.mouse.y = e.clientY;
+        if (state.mouse.downL) { state.camera.theta -= dx * 0.005; state.camera.phi = Math.min(Math.max(0.05, state.camera.phi - dy*0.005), Math.PI-0.05); }
+        if (state.mouse.downM) { // simple pan on screen plane
+          const panSpeed = 0.002 * state.camera.dist;
+          state.camera.target[0] -= dx * panSpeed; state.camera.target[1] += dy * panSpeed;
+        }
+      });
+      canvas.addEventListener('wheel', e=> { e.preventDefault(); state.camera.dist *= Math.exp(e.deltaY * 0.001); state.camera.dist = Math.min(Math.max(0.8, state.camera.dist), 20.0); state.isMoving = true; }, { passive: false });
+      // Focus (Cinema4D F): hedefi merkeze al ve ekrana sığdır
+      function frameScene(){
+          // model AABB veya küreye göre
+          let minx=-0.6, miny=0.0, minz=-0.6, maxx=0.6, maxy=1.2, maxz=0.6;
+          if (ui.objectType && ui.objectType.value==='mesh' && mesh.vertices.length>0){
+            // yaklaşık normalize edilmiş AABB
+            minx = mesh.aabb[0]; miny=mesh.aabb[1]; minz=mesh.aabb[2]; maxx=mesh.aabb[3]; maxy=mesh.aabb[4]; maxz=mesh.aabb[5];
+          }
+          const cx=(minx+maxx)/2, cy=(miny+maxy)/2, cz=(minz+maxz)/2; const sx=maxx-minx, sy=maxy-miny, sz=maxz-minz; const radius = Math.max(sx, Math.max(sy, sz))*0.6 + 0.2;
+          state.camera.target = [cx, cy, cz];
+          state.camera.dist = Math.max(0.8, radius*2.2);
+          state.isMoving=false; resetAccum();
+      }
+      window.addEventListener('keydown', e=> { if (e.key.toLowerCase()==='f') frameScene(); });
+      document.getElementById('focusBtn').addEventListener('click', frameScene);
+
+      // Touch gestures (mobile): pinch zoom, one-finger orbit, two-finger pan
+      let touchState = { active:false, two:false, lastDist:0, lastX:0, lastY:0 };
+      canvas.addEventListener('touchstart', e=> {
+        if (e.touches.length===1){ touchState.active=true; touchState.two=false; touchState.lastX=e.touches[0].clientX; touchState.lastY=e.touches[0].clientY; }
+        if (e.touches.length===2){ touchState.active=true; touchState.two=true; const dx=e.touches[0].clientX - e.touches[1].clientX; const dy=e.touches[0].clientY - e.touches[1].clientY; touchState.lastDist=Math.hypot(dx,dy); touchState.lastX=(e.touches[0].clientX+e.touches[1].clientX)/2; touchState.lastY=(e.touches[0].clientY+e.touches[1].clientY)/2; }
+      }, {passive:true});
+      canvas.addEventListener('touchmove', e=> {
+        if (!touchState.active) return;
+        if (touchState.two && e.touches.length===2){
+          const dx=e.touches[0].clientX - e.touches[1].clientX; const dy=e.touches[0].clientY - e.touches[1].clientY; const dist=Math.hypot(dx,dy); const scale = dist / (touchState.lastDist||dist);
+          state.camera.dist = Math.min(Math.max(0.8, state.camera.dist / Math.max(0.5, Math.min(2.0, scale))), 20.0);
+          // two-finger pan using midpoint move
+          const mx=(e.touches[0].clientX+e.touches[1].clientX)/2; const my=(e.touches[0].clientY+e.touches[1].clientY)/2; const pdx=mx - touchState.lastX; const pdy=my - touchState.lastY;
+          const panSpeed = 0.002 * state.camera.dist; state.camera.target[0] -= pdx * panSpeed; state.camera.target[1] += pdy * panSpeed;
+          touchState.lastDist=dist; touchState.lastX=mx; touchState.lastY=my;
+        } else if (!touchState.two && e.touches.length===1){
+          const dx=e.touches[0].clientX - touchState.lastX; const dy=e.touches[0].clientY - touchState.lastY; touchState.lastX=e.touches[0].clientX; touchState.lastY=e.touches[0].clientY;
+          state.camera.theta -= dx * 0.005; state.camera.phi = Math.min(Math.max(0.05, state.camera.phi - dy*0.005), Math.PI-0.05);
+        }
+        state.isMoving=true;
+      }, {passive:true});
+      canvas.addEventListener('touchend', e=> { touchState.active=false; touchState.two=false; state.isMoving=false; resetAccum(); }, {passive:true});
+
+      // Cinema4D benzeri kısayollar (Alt+LMB orbit, Alt+MMB pan, Alt+RMB dolly)
+      let altDown = false; window.addEventListener('keydown', e=> { if (e.key === 'Alt') altDown = true; }); window.addEventListener('keyup', e=> { if (e.key === 'Alt') { altDown = false; state.isMoving = false; resetAccum(); } });
+      canvas.addEventListener('mousedown', e=> { if (!altDown) return; if (e.button===0) state.mouse.downL = true; if (e.button===1) state.mouse.downM = true; if (e.button===2) { state.mouse.downR = true; } });
+      window.addEventListener('mouseup', e=> { if (e.button===2) state.mouse.downR = false; });
+      window.addEventListener('mousemove', e=> { if (!altDown) return; const dx = e.movementX, dy = e.movementY; if (state.mouse.downL) { state.camera.theta -= dx * 0.005; state.camera.phi = Math.min(Math.max(0.05, state.camera.phi - dy*0.005), Math.PI-0.05); } if (state.mouse.downM) { const panSpeed = 0.002 * state.camera.dist; state.camera.target[0] -= dx * panSpeed; state.camera.target[1] += dy * panSpeed; } if (state.mouse.downR) { state.camera.dist *= Math.exp(dy * 0.003); } state.isMoving = true; });
+
+      // Uniform locations
+      const U = (p, n)=> gl.getUniformLocation(p, n);
+      const u = {
+        tracer: {
+          res: U(tracerProg, 'uResolution'), frame: U(tracerProg, 'uFrame'), accum: U(tracerProg, 'uAccum'), useAccum: U(tracerProg, 'uUseAccum'), camPos: U(tracerProg, 'uCamPos'), camBasis: U(tracerProg, 'uCamBasis'), time: U(tracerProg, 'uTime'), exposure: U(tracerProg, 'uExposure'), gamma: U(tracerProg, 'uGamma'), spp: U(tracerProg, 'uSPP'), albedo: U(tracerProg, 'uAlbedo'), metallic: U(tracerProg, 'uMetallic'), roughness: U(tracerProg, 'uRoughness'), specular: U(tracerProg, 'uSpecular'), ior: U(tracerProg, 'uIOR'), clearcoat: U(tracerProg, 'uClearcoat'), clearcoatRoughness: U(tracerProg, 'uClearcoatRoughness'), hasEnv: U(tracerProg, 'uHasEnv'), env: U(tracerProg, 'uEnv'), envRes: U(tracerProg, 'uEnvRes'), envRot: U(tracerProg, 'uEnvRot'), groundOn: U(tracerProg, 'uGroundOn'), groundRough: U(tracerProg, 'uGroundRough'), sphereR: U(tracerProg, 'uSphereR'), useMesh: U(tracerProg, 'uUseMesh'), triTex: U(tracerProg, 'uTriTex'), triCount: U(tracerProg, 'uTriCount'), triTexW: U(tracerProg, 'uTriTexW')
+        },
+        blit: { tex: U(blitProg, 'uTex'), exposure: U(blitProg, 'uExposure'), gamma: U(blitProg, 'uGamma') }
+      };
+
+      function setUniforms(){
+        gl.useProgram(tracerProg);
+        gl.uniform2f(u.tracer.res, state.width, state.height);
+        gl.uniform1i(u.tracer.frame, state.frame);
+        const allowAccum = state.canAccumulate && state.frame > 0 && !state.isMoving && !(state.envRotSpeed && state.envRotSpeed > 0.0);
+        gl.uniform1i(u.tracer.useAccum, allowAccum ? 1 : 0);
+        gl.uniform1f(u.tracer.time, performance.now()*0.001);
+        gl.uniform1f(u.tracer.exposure, parseFloat(ui.exposure.value));
+        gl.uniform1f(u.tracer.gamma, parseFloat(ui.gamma.value));
+        gl.uniform1i(u.tracer.spp, state.samplesPerFrame|0);
+        const alb = hexToRgb(ui.albedo.value); gl.uniform3f(u.tracer.albedo, alb[0], alb[1], alb[2]);
+        gl.uniform1f(u.tracer.metallic, parseFloat(ui.metallic.value));
+        gl.uniform1f(u.tracer.roughness, parseFloat(ui.roughness.value));
+        gl.uniform1f(u.tracer.specular, parseFloat(ui.specular.value));
+        gl.uniform1f(u.tracer.ior, parseFloat(ui.ior.value));
+        gl.uniform1f(u.tracer.clearcoat, parseFloat(ui.clearcoat.value));
+        gl.uniform1f(u.tracer.clearcoatRoughness, parseFloat(ui.clearcoatRough.value));
+        gl.uniform1i(u.tracer.groundOn, 0);
+        gl.uniform1f(u.tracer.groundRough, 0.6);
+
+        // Env
+        gl.uniform1i(u.tracer.hasEnv, state.hasEnv ? 1 : 0);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, state.envTex); gl.uniform1i(u.tracer.env, 1);
+        gl.uniform2f(u.tracer.envRes, state.envRes[0], state.envRes[1]);
+        // Animate env rotation (deg/sec)
+        const t = performance.now() * 0.001;
+        const speed = state.envRotSpeed || 0.0;
+        const envRotDegAnimated = state.envRotDeg + speed * t;
+        gl.uniform1f(u.tracer.envRot, envRotDegAnimated * Math.PI / 180);
+        // IBL CDF textures
+        if (state.envCondCDF && state.envMargCDF) {
+          gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, state.envCondCDF); gl.uniform1i(gl.getUniformLocation(tracerProg,'uEnvCondCDF'), 4);
+          gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, state.envMargCDF); gl.uniform1i(gl.getUniformLocation(tracerProg,'uEnvMargCDF'), 5);
+          gl.uniform2f(gl.getUniformLocation(tracerProg,'uEnvCDFSize'), state.envCDFSize[0], state.envCDFSize[1]);
+        }
+
+        // Camera
+        const th = state.camera.theta, ph = state.camera.phi, R = state.camera.dist;
+        const st = Math.sin(th), ct = Math.cos(th), sp = Math.sin(ph), cp = Math.cos(ph);
+        const eye = [state.camera.target[0] + R*st*sp, state.camera.target[1] + R*cp, state.camera.target[2] + R*ct*sp];
+        const forward = normalize(sub(state.camera.target, eye));
+        const right = normalize(cross(forward, [0,1,0]));
+        const up = normalize(cross(right, forward));
+        gl.uniform3f(u.tracer.camPos, eye[0], eye[1], eye[2]);
+        gl.uniformMatrix3fv(u.tracer.camBasis, false, new Float32Array([right[0], right[1], right[2], up[0], up[1], up[2], forward[0], forward[1], forward[2]]));
+        // Sphere radius from UI
+        if (ui.sphereR) {
+          const r = parseFloat(ui.sphereR.value);
+          const loc = gl.getUniformLocation(tracerProg, 'uSphereR');
+          gl.uniform1f(loc, r);
+        }
+
+        // Mesh uniforms
+        const wantMesh = (ui.objectType && ui.objectType.value === 'mesh' && mesh.indices.length > 0);
+        if (wantMesh && mesh.indices.length > 0 && (!state.triTex || state.triTexW !== Math.max(1, Math.floor(mesh.indices.length/3)))) {
+          // pack triangles into a 1D float texture (width = triCount, height=3 rows)
+          if (state.triTex) gl.deleteTexture(state.triTex);
+          const triCount = Math.max(1, Math.floor(mesh.indices.length/3));
+          const width = triCount; const height = 6;
+          const data = new Float32Array(width*height*4);
+          for (let i=0;i<triCount;i++){
+            const ia = mesh.indices[i*3+0]*3, ib = mesh.indices[i*3+1]*3, ic = mesh.indices[i*3+2]*3;
+            const ax = mesh.vertices[ia+0]||0, ay=mesh.vertices[ia+1]||0, az=mesh.vertices[ia+2]||0;
+            const bx = mesh.vertices[ib+0]||0, by=mesh.vertices[ib+1]||0, bz=mesh.vertices[ib+2]||0;
+            const cx = mesh.vertices[ic+0]||0, cy=mesh.vertices[ic+1]||0, cz=mesh.vertices[ic+2]||0;
+            data[(0*width + i)*4+0]=ax; data[(0*width + i)*4+1]=ay; data[(0*width + i)*4+2]=az; data[(0*width + i)*4+3]=1;
+            data[(1*width + i)*4+0]=bx; data[(1*width + i)*4+1]=by; data[(1*width + i)*4+2]=bz; data[(1*width + i)*4+3]=1;
+            data[(2*width + i)*4+0]=cx; data[(2*width + i)*4+1]=cy; data[(2*width + i)*4+2]=cz; data[(2*width + i)*4+3]=1;
+            // face normal for smooth approx
+            const abx=bx-ax, aby=by-ay, abz=bz-az; const acx=cx-ax, acy=cy-ay, acz=cz-az; const fnx=aby*acz - abz*acy, fny=abz*acx - abx*acz, fnz=abx*acy - aby*acx; const len=Math.hypot(fnx,fny,fnz)||1; const nx=fnx/len, ny=fny/len, nz=fnz/len;
+            data[(3*width + i)*4+0]=nx; data[(3*width + i)*4+1]=ny; data[(3*width + i)*4+2]=nz; data[(3*width + i)*4+3]=1;
+            data[(4*width + i)*4+0]=nx; data[(4*width + i)*4+1]=ny; data[(4*width + i)*4+2]=nz; data[(4*width + i)*4+3]=1;
+            data[(5*width + i)*4+0]=nx; data[(5*width + i)*4+1]=ny; data[(5*width + i)*4+2]=nz; data[(5*width + i)*4+3]=1;
+          }
+          const tex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, data);
+          state.triTex = tex; state.triTexW = width; state.triCount = Math.floor(mesh.indices.length/3);
+        }
+        const useMeshStrict = wantMesh && !!state.triTex && !!bvh.tex;
+        gl.uniform1i(u.tracer.useMesh, useMeshStrict ? 1 : 0);
+        if (useMeshStrict) {
+          gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, state.triTex); gl.uniform1i(u.tracer.triTex, 2);
+          gl.uniform1i(u.tracer.triTexW, state.triTexW|0); gl.uniform1i(u.tracer.triCount, state.triCount|0);
+          gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, bvh.tex); gl.uniform1i(gl.getUniformLocation(tracerProg,'uBVHTex'), 3);
+          gl.uniform1i(gl.getUniformLocation(tracerProg,'uBVHNodeCount'), bvh.nodeCount|0); gl.uniform1i(gl.getUniformLocation(tracerProg,'uBVHTexW'), bvh.texW|0);
+        }
+      }
+
+      function normalize(v){ const l = Math.hypot(v[0], v[1], v[2]); return [v[0]/l, v[1]/l, v[2]/l]; }
+      function cross(a,b){ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+      function sub(a,b){ return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+
+      // Render loop
+      function render(){
+        resizeCanvas();
+
+        gl.bindVertexArray(vao);
+
+        if (state.canAccumulate) {
+          // 1) Trace into targets.b using targets.a as accumulation source
+          gl.useProgram(tracerProg);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, targets.fboB);
+          gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, targets.a);
+          gl.uniform1i(u.tracer.accum, 0);
+          setUniforms();
+          gl.uniform1i(gl.getUniformLocation(tracerProg,'uDoTonemap'), 0);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+          // 2) Blit to screen and swap
+          gl.useProgram(blitProg);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, targets.b);
+          gl.uniform1i(u.blit.tex, 0);
+          gl.uniform1f(u.blit.exposure, parseFloat(ui.exposure.value));
+          gl.uniform1f(u.blit.gamma, parseFloat(ui.gamma.value));
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+          // swap
+          const tmp = targets.a; targets.a = targets.b; targets.b = tmp;
+          const tmpF = targets.fboA; targets.fboA = targets.fboB; targets.fboB = tmpF;
+        } else {
+          // Fallback: render directly to default framebuffer (no accumulation)
+          gl.useProgram(tracerProg);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, null);
+          setUniforms();
+          gl.uniform1i(gl.getUniformLocation(tracerProg,'uDoTonemap'), 1);
+          gl.uniform1i(u.tracer.useAccum, 0);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+
+        // Advance frame
+        if (!state.isMoving && state.frame < state.maxFrames) state.frame++; else if (state.isMoving) state.frame = 0; // moving => reset frame counter live
+
+        // Stats
+        const now = performance.now();
+        state.stats.frames++;
+        if (now - state.stats.last > 500) {
+          const fps = state.stats.frames * 1000 / (now - state.stats.last);
+          ui.stat.textContent = `SPP: ${state.frame}/${state.maxFrames} | FPS: ${fps.toFixed(1)} | ACC: ${state.canAccumulate ? 'on' : 'off'}`;
+          state.stats.frames = 0; state.stats.last = now;
+        }
+
+        requestAnimationFrame(render);
+      }
+
+      // Init
+      onChange();
+      resizeCanvas();
+      // Varsayılan HDRI
+      loadHDR('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/venice_sunset_1k.hdr');
+      // Varsayılan model: Walt Head
+      (async ()=>{ try { const res = await fetch('https://rawcdn.githack.com/mrdoob/three.js/master/examples/models/obj/walt/WaltHead.obj', {mode:'cors'}); const txt = await res.text(); const {vertices, indices, normals} = parseOBJ(txt); mesh.vertices=vertices; mesh.indices=indices; mesh.normals=normals; uploadBVHAndTris(); resetAccum(); } catch(e){ console.warn('Varsayılan model yüklenemedi', e); } })();
+      requestAnimationFrame(render);
+
+      // Handle layout
+      const ro = new ResizeObserver(()=> resizeCanvas()); ro.observe(canvas);
+      window.addEventListener('resize', resizeCanvas);
+    </script>
+  </body>
+</html>
+
+
